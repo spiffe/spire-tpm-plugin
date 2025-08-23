@@ -136,9 +136,7 @@ func (p *Plugin) calculateResponse(ec *attest.EncryptedCredential, aikBytes []by
 	tpm := p.tpm
 	if tpm == nil {
 		var err error
-		tpm, err = attest.OpenTPM(&attest.OpenConfig{
-			TPMVersion: attest.TPMVersion20,
-		})
+		tpm, err = attest.OpenTPM(&attest.OpenConfig{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to tpm: %v", err)
 		}
@@ -164,9 +162,7 @@ func (p *Plugin) generateAttestationData() (*common.AttestationData, []byte, err
 	tpm := p.tpm
 	if tpm == nil {
 		var err error
-		tpm, err = attest.OpenTPM(&attest.OpenConfig{
-			TPMVersion: attest.TPMVersion20,
-		})
+		tpm, err = attest.OpenTPM(&attest.OpenConfig{})
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to connect to tpm: %v", err)
 		}

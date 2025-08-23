@@ -21,7 +21,6 @@ func TestFakeTPM(t *testing.T) {
 	defer client.CheckedClose(t, s)
 
 	tpm, err := attest.OpenTPM(&attest.OpenConfig{
-		TPMVersion:     attest.TPMVersion20,
 		CommandChannel: &common_test.TPMCmdChannel{ReadWriteCloser: s},
 	})
 	require.NoError(t, err)
