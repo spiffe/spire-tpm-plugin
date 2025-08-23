@@ -148,6 +148,9 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 		}
 	}
 
+	var selectors []string
+	selectors = append(selectors, "pub_hash:"+hashEncoded)
+
 	if !validEK && p.config.CaPath != "" && ek.Certificate != nil {
 		files, err := os.ReadDir(p.config.CaPath)
 		if err != nil {
@@ -184,7 +187,7 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 		}
 
 		opts := x509.VerifyOptions{
-			Roots:     roots,
+			Roots: roots,
 			// NOTE: the only ExtKeyUsage that TPM 2.0 sets is the optional 'tcg-kp-EKCertificate' key usage.
 			// This is already checked by the x509ext package.
 			// An empty KeyUsages defaults to x509.ExtKeyUsageServerAuth which is not set on EK Certs.
@@ -195,6 +198,13 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 		if err != nil {
 			return fmt.Errorf("tpm: could not verify cert: %v", err)
 		}
+
+		selectors = append(selectors,
+			fmt.Sprintf("tpm_version:%s", ekCert.TpmVersion),
+			fmt.Sprintf("tpm_manufacturer:%s", ekCert.TpmManufacturer),
+			fmt.Sprintf("tpm_model:%s", ekCert.TpmModel),
+		)
+
 		validEK = true
 	}
 
@@ -247,17 +257,11 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 		Response: &nodeattestorv1.AttestResponse_AgentAttributes{
 			AgentAttributes: &nodeattestorv1.AgentAttributes{
 				SpiffeId:       common.AgentID(p.config.trustDomain, hashEncoded),
-				SelectorValues: buildSelectors(hashEncoded),
+				SelectorValues: selectors,
 				CanReattest:    true,
 			},
 		},
 	})
-}
-
-func buildSelectors(pubHash string) []string {
-	var selectors []string
-	selectors = append(selectors, "pub_hash:"+pubHash)
-	return selectors
 }
 
 func (p *Plugin) getConfiguration() *Config {
