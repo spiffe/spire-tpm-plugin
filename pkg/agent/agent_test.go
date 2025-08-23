@@ -64,7 +64,6 @@ func TestAttestor(t *testing.T) {
 	invalidCA := pemToCertificate(t, invalidCAPEM)
 
 	tpm, err := attest.OpenTPM(&attest.OpenConfig{
-		TPMVersion:     attest.TPMVersion20,
 		CommandChannel: &common_test.TPMCmdChannel{ReadWriteCloser: s},
 	})
 	if err != nil {

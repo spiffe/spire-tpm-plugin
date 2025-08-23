@@ -187,8 +187,8 @@ if command -v tpm2_getpubek > /dev/null 2>&1; then
   tpm2_nvdefine -x "${h_ek_pub_crt}" -a "${h_authorization}" -s "${ek_der_cert_size}" -t "${ek_cert_nvram_attr}"
   tpm2_nvwrite -x "${h_ek_pub_crt}" -a "${h_authorization}" -f "${output_der_crt}"
 else
-  tpm2_nvdefine "${h_ek_pub_crt}" -p "${h_authorization}" -s "${ek_der_cert_size}"
-  tpm2_nvwrite "${h_ek_pub_crt}" -P "${h_authorization}" -i "${output_der_crt}"
+  tpm2_nvdefine "${h_ek_pub_crt}" -C "${h_authorization}" -s "${ek_der_cert_size}" -a "${ek_cert_nvram_attr}"
+  tpm2_nvwrite "${h_ek_pub_crt}" -C "${h_authorization}" -i "${output_der_crt}"
 fi
 
 # Show EK certificate in console
