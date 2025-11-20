@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 
 	"github.com/google/go-attestation/attest"
@@ -134,10 +135,16 @@ func (p *Plugin) AidAttestation(stream nodeattestorv1.NodeAttestor_AidAttestatio
 
 func (p *Plugin) calculateResponse(ec *attest.EncryptedCredential, aikBytes []byte) (*common.ChallengeResponse, error) {
 	tpm := p.tpm
+
+	tpmSocket, err := OpenTPMSocket("/run/swtpm/tpm.sock")
+	if err != nil {
+		return nil, fmt.Errorf("could not open /run/swtpm: %w", err)
+	}
 	if tpm == nil {
 		var err error
 		tpm, err = attest.OpenTPM(&attest.OpenConfig{
-			TPMVersion: attest.TPMVersion20,
+			TPMVersion:     attest.TPMVersion20,
+			CommandChannel: tpmSocket,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to tpm: %v", err)
@@ -160,12 +167,47 @@ func (p *Plugin) calculateResponse(ec *attest.EncryptedCredential, aikBytes []by
 	}, nil
 }
 
+type SocketChannel struct {
+	net.Conn
+}
+
+func (sc *SocketChannel) Read(p []byte) (n int, err error) {
+	return sc.Conn.Read(p)
+}
+
+func (sc *SocketChannel) Write(p []byte) (n int, err error) {
+	return sc.Conn.Write(p)
+}
+
+func (sc *SocketChannel) Close() error {
+	return sc.Conn.Close()
+}
+
+func (sc *SocketChannel) MeasurementLog() ([]byte, error) {
+	return nil, nil // Return actual log and error
+}
+
+func OpenTPMSocket(socketPath string) (attest.CommandChannelTPM20, error) {
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return nil, err
+	}
+	return &SocketChannel{Conn: conn}, nil
+}
+
 func (p *Plugin) generateAttestationData() (*common.AttestationData, []byte, error) {
 	tpm := p.tpm
+
+	tpmSocket, err := OpenTPMSocket("/run/swtpm/tpm.sock")
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not open /run/swtpm: %w", err)
+	}
+
 	if tpm == nil {
 		var err error
 		tpm, err = attest.OpenTPM(&attest.OpenConfig{
-			TPMVersion: attest.TPMVersion20,
+			TPMVersion:     attest.TPMVersion20,
+			CommandChannel: tpmSocket,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to connect to tpm: %v", err)
