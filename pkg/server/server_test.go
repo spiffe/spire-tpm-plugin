@@ -52,7 +52,6 @@ func Test_checkHashAllowed(t *testing.T) {
 				_ = f.Close()
 
 			} else {
-				// normal test: root is a directory
 				root = t.TempDir()
 				if tt.setupFile {
 					path := filepath.Join(root, tt.hashEncoded)
