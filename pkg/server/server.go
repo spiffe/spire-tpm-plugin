@@ -141,10 +141,7 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 	validEK := false
 
 	if p.config.HashPath != "" {
-		filename := filepath.Join(p.config.HashPath, hashEncoded)
-		if _, err := os.Stat(filename); !os.IsNotExist(err) {
-			validEK = true
-		}
+		validEK = checkHashAllowed(p.config.HashPath, hashEncoded)
 	}
 
 	if !validEK && p.config.CaPath != "" && ek.Certificate != nil {
@@ -242,6 +239,20 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 			},
 		},
 	})
+}
+
+func checkHashAllowed(hashPath, hashEncoded string) bool {
+	// Check if hashPath is a directory, fail if this is simply a file
+	fileInfo, err := os.Stat(hashPath)
+	if err != nil || !fileInfo.IsDir() {
+		return false
+	}
+
+	filename := filepath.Join(hashPath, hashEncoded)
+	if _, err := os.Stat(filename); !os.IsNotExist(err) {
+		return true
+	}
+	return false
 }
 
 func buildSelectors(pubHash string) []string {
