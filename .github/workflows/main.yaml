@@ -15,6 +15,9 @@ jobs:
     permissions:
       contents: write
       packages: write
+    env:
+      # COFIDE: Override container image repository
+      DOCKER_REPOSITORY_PREFIX: cofide/spire-tpm-plugin
     steps:
 
     - name: Checkout
