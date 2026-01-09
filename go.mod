@@ -8,8 +8,9 @@ require (
 	github.com/google/go-attestation v0.4.4-0.20220404204839-8820d49b18d9
 	github.com/google/go-tpm-tools v0.3.8
 	github.com/hashicorp/hcl v1.0.1-0.20190430135223-99e2f22d1c94
-	github.com/spiffe/spire-plugin-sdk v1.7.0
-	github.com/stretchr/testify v1.7.1
+	// COFIDE: This should be kept in sync with the version used in SPIRE.
+	github.com/spiffe/spire-plugin-sdk v1.4.4-0.20250606112051-68609d83ce7c
+	github.com/stretchr/testify v1.8.2
 	google.golang.org/grpc v1.56.3
 )
 
@@ -34,5 +35,5 @@ require (
 	golang.org/x/text v0.23.0 // indirect
 	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
-	gopkg.in/yaml.v3 v3.0.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
