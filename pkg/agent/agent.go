@@ -48,26 +48,49 @@ type Config struct {
 	TPMPath     string `hcl:"tpm_path"`
 }
 
-func (p *Plugin) Configure(ctx context.Context, req *configv1.ConfigureRequest) (*configv1.ConfigureResponse, error) {
+func buildConfig(coreConfig *configv1.CoreConfiguration, hclText string) (*Config, error) {
 	config := &Config{}
-	if err := hcl.Decode(config, req.HclConfiguration); err != nil {
+	if err := hcl.Decode(config, hclText); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "failed to decode configuration file: %v", err)
 	}
 
-	if req.CoreConfiguration == nil {
+	if coreConfig == nil {
 		return nil, status.Errorf(codes.InvalidArgument, "global configuration is required")
 	}
-	if req.CoreConfiguration.TrustDomain == "" {
+	if coreConfig.TrustDomain == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "trust_domain is required")
+	}
+
+	config.trustDomain = coreConfig.TrustDomain
+	return config, nil
+}
+
+func (p *Plugin) Configure(ctx context.Context, req *configv1.ConfigureRequest) (*configv1.ConfigureResponse, error) {
+	config, err := buildConfig(req.GetCoreConfiguration(), req.GetHclConfiguration())
+	if err != nil {
+		return nil, err
 	}
 
 	p.m.Lock()
 	defer p.m.Unlock()
 
-	config.trustDomain = req.CoreConfiguration.TrustDomain
 	p.config = config
 
 	return &configv1.ConfigureResponse{}, nil
+}
+
+func (p *Plugin) Validate(_ context.Context, req *configv1.ValidateRequest) (*configv1.ValidateResponse, error) {
+	_, err := buildConfig(req.GetCoreConfiguration(), req.GetHclConfiguration())
+
+	var notes []string
+	if err != nil {
+		notes = append(notes, err.Error())
+	}
+
+	return &configv1.ValidateResponse{
+		Valid: err == nil,
+		Notes: notes,
+	}, nil
 }
 
 func (p *Plugin) getOpenConfig() (*attest.OpenConfig, error) {
@@ -113,7 +136,6 @@ func (p *Plugin) AidAttestation(stream nodeattestorv1.NodeAttestor_AidAttestatio
 			Payload: attestationDataBytes,
 		},
 	})
-
 	if err != nil {
 		return status.Errorf(status.Code(err), "failed to send attestation data: %v", err)
 	}
@@ -143,7 +165,6 @@ func (p *Plugin) AidAttestation(stream nodeattestorv1.NodeAttestor_AidAttestatio
 			ChallengeResponse: responseBytes,
 		},
 	})
-
 	if err != nil {
 		return status.Errorf(status.Code(err), "unable to send challenge response: %v", err)
 	}

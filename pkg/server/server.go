@@ -42,6 +42,48 @@ type Config struct {
 	HashPath    string `hcl:"hash_path"`
 }
 
+func buildConfig(coreConfig *configv1.CoreConfiguration, hclText string) (*Config, error) {
+	config := &Config{}
+	if err := hcl.Decode(config, hclText); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "failed to decode configuration file: %v", err)
+	}
+
+	if coreConfig == nil {
+		return nil, status.Errorf(codes.InvalidArgument, "global configuration is required")
+	}
+	if coreConfig.TrustDomain == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "trust_domain is required")
+	}
+
+	if config.CaPath != "" {
+		if _, err := os.Stat(config.CaPath); os.IsNotExist(err) {
+			return nil, status.Errorf(codes.InvalidArgument, "ca_path '%s' does not exist", config.CaPath)
+		}
+	} else {
+		tryCaPath := "/opt/spire/.data/certs"
+		if _, err := os.Stat(tryCaPath); !os.IsNotExist(err) {
+			config.CaPath = tryCaPath
+		}
+	}
+	if config.HashPath != "" {
+		if _, err := os.Stat(config.HashPath); os.IsNotExist(err) {
+			return nil, status.Errorf(codes.InvalidArgument, "hash_path '%s' does not exist", config.HashPath)
+		}
+	} else {
+		tryHashPath := "/opt/spire/.data/hashes"
+		if _, err := os.Stat(tryHashPath); !os.IsNotExist(err) {
+			config.HashPath = tryHashPath
+		}
+	}
+
+	if config.CaPath == "" && config.HashPath == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "either ca_path, hash_path, or both are required")
+	}
+
+	config.trustDomain = coreConfig.TrustDomain
+	return config, nil
+}
+
 // Plugin implements the nodeattestor Plugin interface
 type Plugin struct {
 	nodeattestorv1.UnsafeNodeAttestorServer
@@ -59,50 +101,31 @@ func NewFromConfig(config *Config) *Plugin {
 }
 
 func (p *Plugin) Configure(ctx context.Context, req *configv1.ConfigureRequest) (*configv1.ConfigureResponse, error) {
-	config := &Config{}
-	if err := hcl.Decode(config, req.HclConfiguration); err != nil {
-		return nil, fmt.Errorf("failed to decode configuration file: %v", err)
+	config, err := buildConfig(req.GetCoreConfiguration(), req.GetHclConfiguration())
+	if err != nil {
+		return nil, err
 	}
 
-	if req.CoreConfiguration == nil {
-		return nil, errors.New("global configuration is required")
-	}
-	if req.CoreConfiguration.TrustDomain == "" {
-		return nil, errors.New("trust_domain is required")
-	}
-	if config.CaPath != "" {
-		if _, err := os.Stat(config.CaPath); os.IsNotExist(err) {
-			return nil, errors.New(fmt.Sprintf("ca_path '%s' does not exist", config.CaPath))
-		}
-	} else {
-		var tryCaPath = "/opt/spire/.data/certs"
-		if _, err := os.Stat(tryCaPath); !os.IsNotExist(err) {
-			config.CaPath = tryCaPath
-		}
-	}
-	if config.HashPath != "" {
-		if _, err := os.Stat(config.HashPath); os.IsNotExist(err) {
-			return nil, errors.New(fmt.Sprintf("hash_path '%s' does not exist", config.HashPath))
-		}
-	} else {
-		var tryHashPath = "/opt/spire/.data/hashes"
-		if _, err := os.Stat(tryHashPath); !os.IsNotExist(err) {
-			config.HashPath = tryHashPath
-		}
-	}
-
-	if config.CaPath == "" && config.HashPath == "" {
-		return nil, errors.New("either ca_path, hash_path, or both are required")
-	}
-
-	config.trustDomain = req.CoreConfiguration.TrustDomain
 	p.config = config
 
 	return &configv1.ConfigureResponse{}, nil
 }
 
-func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
+func (p *Plugin) Validate(_ context.Context, req *configv1.ValidateRequest) (*configv1.ValidateResponse, error) {
+	_, err := buildConfig(req.GetCoreConfiguration(), req.GetHclConfiguration())
 
+	var notes []string
+	if err != nil {
+		notes = append(notes, err.Error())
+	}
+
+	return &configv1.ValidateResponse{
+		Valid: err == nil,
+		Notes: notes,
+	}, nil
+}
+
+func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 	if p.config == nil {
 		return errors.New("plugin not configured")
 	}

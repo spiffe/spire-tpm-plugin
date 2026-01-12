@@ -238,14 +238,15 @@ func doAttestationFlow(t *testing.T, agentPlugin agentnodeattestorv1.NodeAttesto
 }
 
 func prepareTestDir(t *testing.T, caCerts []*x509.Certificate,
-	pemEncodeCA bool, emptyCA bool, hashes []string) string {
+	pemEncodeCA bool, emptyCA bool, hashes []string,
+) string {
 	dir := t.TempDir()
 
 	hcl := ""
 	if emptyCA || caCerts != nil {
 		caCertPath := filepath.Join(dir, "certs")
 		hcl += fmt.Sprintf("ca_path = \"%s\"\n", caCertPath)
-		require.NoError(t, os.Mkdir(caCertPath, 0755))
+		require.NoError(t, os.Mkdir(caCertPath, 0o755))
 		if caCerts != nil {
 			for i := range caCerts {
 				caCert := caCerts[i]
@@ -255,7 +256,7 @@ func prepareTestDir(t *testing.T, caCerts []*x509.Certificate,
 				} else {
 					b = caCert.Raw
 				}
-				writeFile(t, filepath.Join(caCertPath, fmt.Sprintf("ca.%d.crt", i)), b, 0644)
+				writeFile(t, filepath.Join(caCertPath, fmt.Sprintf("ca.%d.crt", i)), b, 0o644)
 			}
 		}
 	}
@@ -263,9 +264,9 @@ func prepareTestDir(t *testing.T, caCerts []*x509.Certificate,
 	if hashes != nil {
 		hashPath := filepath.Join(dir, "hashes")
 		hcl += fmt.Sprintf("hash_path = \"%s\"\n", hashPath)
-		require.NoError(t, os.Mkdir(hashPath, 0755))
+		require.NoError(t, os.Mkdir(hashPath, 0o755))
 		for i := range hashes {
-			writeFile(t, filepath.Join(hashPath, hashes[i]), []byte{}, 0644)
+			writeFile(t, filepath.Join(hashPath, hashes[i]), []byte{}, 0o644)
 		}
 	}
 
@@ -286,7 +287,14 @@ func loadAgentPlugin(t *testing.T, tpm *attest.TPM) agentnodeattestorv1.NodeAtte
 		ServiceClients: []pluginsdk.ServiceClient{configClient},
 	})
 
-	_, err := configClient.Configure(context.Background(), &configv1.ConfigureRequest{
+	_, err := configClient.Validate(context.Background(), &configv1.ValidateRequest{
+		CoreConfiguration: &configv1.CoreConfiguration{
+			TrustDomain: trustDomain,
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = configClient.Configure(context.Background(), &configv1.ConfigureRequest{
 		CoreConfiguration: &configv1.CoreConfiguration{
 			TrustDomain: trustDomain,
 		},
@@ -308,7 +316,15 @@ func loadServerPlugin(t *testing.T, hclConfig string) servernodeattestorv1.NodeA
 		ServiceClients: []pluginsdk.ServiceClient{configClient},
 	})
 
-	_, err := configClient.Configure(context.Background(), &configv1.ConfigureRequest{
+	_, err := configClient.Validate(context.Background(), &configv1.ValidateRequest{
+		HclConfiguration: hclConfig,
+		CoreConfiguration: &configv1.CoreConfiguration{
+			TrustDomain: trustDomain,
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = configClient.Configure(context.Background(), &configv1.ConfigureRequest{
 		HclConfiguration: hclConfig,
 		CoreConfiguration: &configv1.CoreConfiguration{
 			TrustDomain: trustDomain,
@@ -316,7 +332,6 @@ func loadServerPlugin(t *testing.T, hclConfig string) servernodeattestorv1.NodeA
 	})
 	require.NoError(t, err)
 	return nodeAttestorClient
-
 }
 
 func writeFile(t *testing.T, path string, data []byte, mode os.FileMode) {
