@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNodeStore_Verify_Success(t *testing.T) {
+func TestNodeStore_Attest_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -33,11 +33,11 @@ func TestNodeStore_Verify_Success(t *testing.T) {
 	}
 	p := NewFromConfig(config)
 
-	err = p.ns.Verify(context.Background(), ekWrapper)
+	err = p.ns.Attest(context.Background(), ekWrapper)
 	assert.NoError(t, err, "NodeStore should validate the EK against the file on disk")
 }
 
-func TestNodeStore_Verify_Failure(t *testing.T) {
+func TestNodeStore_Attest_Failure(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	ekWrapper := &attest.EK{Public: &key.PublicKey}
 
@@ -46,7 +46,7 @@ func TestNodeStore_Verify_Failure(t *testing.T) {
 		HashPath:    t.TempDir(),
 	})
 
-	err := p.ns.Verify(context.Background(), ekWrapper)
+	err := p.ns.Attest(context.Background(), ekWrapper)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "could not validate EK")

@@ -94,7 +94,7 @@ type Plugin struct {
 }
 
 type NodeStore interface {
-	Verify(ctx context.Context, ek *attest.EK) error
+	Attest(ctx context.Context, ek *attest.EK) error
 	Configure(*configv1.CoreConfiguration, string) (*Config, error)
 	Validate(*configv1.CoreConfiguration, string) error
 }
@@ -104,7 +104,7 @@ type FileNodeStore struct {
 	hashPath string
 }
 
-func (s *FileNodeStore) Verify(ctx context.Context, ek *attest.EK) error {
+func (s *FileNodeStore) Attest(ctx context.Context, ek *attest.EK) error {
 	hashEncoded, err := common.GetPubHash(ek)
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "tpm: could not get public key hash: %v", err)
@@ -248,7 +248,7 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 		return err
 	}
 
-	if err := p.ns.Verify(stream.Context(), ek); err != nil {
+	if err := p.ns.Attest(stream.Context(), ek); err != nil {
 		return err
 	}
 
