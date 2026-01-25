@@ -27,9 +27,7 @@ import (
 )
 
 func main() {
-	tpm, err := attest.OpenTPM(&attest.OpenConfig{
-		TPMVersion: attest.TPMVersion20,
-	})
+	tpm, err := attest.OpenTPM(&attest.OpenConfig{})
 	if err != nil {
 		log.Fatalln(err)
 	}

@@ -109,7 +109,12 @@ func (p *Plugin) AidAttestation(stream nodeattestorv1.NodeAttestor_AidAttestatio
 		return status.Errorf(codes.InvalidArgument, "failed to unmarshal challenge: %v", err)
 	}
 
-	response, err := p.calculateResponse(challenge.EC, aik)
+	akBytes, err := aik.Marshal()
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "failed to marshal AK: %v", err)
+	}
+
+	response, err := p.calculateResponse(challenge.EC, akBytes)
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "failed to calculate response: %v", err)
 	}
@@ -129,6 +134,29 @@ func (p *Plugin) AidAttestation(stream nodeattestorv1.NodeAttestor_AidAttestatio
 		return status.Errorf(status.Code(err), "unable to send challenge response: %v", err)
 	}
 
+	// TODO: keep protocol backwards compatible
+	resp, err = stream.Recv()
+	if err != nil {
+		return status.Errorf(status.Code(err), "failed to receive challenge: %v", err)
+	}
+
+	// TODO: AK not here
+	platformParameters, err := p.tpm.AttestPlatform(aik, resp.Challenge, nil)
+	responseBytes, err = json.Marshal(platformParameters)
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "unable to marshal platform parameters: %v", err)
+	}
+
+	err = stream.Send(&nodeattestorv1.PayloadOrChallengeResponse{
+		Data: &nodeattestorv1.PayloadOrChallengeResponse_ChallengeResponse{
+			ChallengeResponse: responseBytes,
+		},
+	})
+
+	if err != nil {
+		return status.Errorf(status.Code(err), "unable to send challenge response: %v", err)
+	}
+
 	return nil
 }
 
@@ -136,9 +164,7 @@ func (p *Plugin) calculateResponse(ec *attest.EncryptedCredential, aikBytes []by
 	tpm := p.tpm
 	if tpm == nil {
 		var err error
-		tpm, err = attest.OpenTPM(&attest.OpenConfig{
-			TPMVersion: attest.TPMVersion20,
-		})
+		tpm, err = attest.OpenTPM(&attest.OpenConfig{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to tpm: %v", err)
 		}
@@ -160,13 +186,11 @@ func (p *Plugin) calculateResponse(ec *attest.EncryptedCredential, aikBytes []by
 	}, nil
 }
 
-func (p *Plugin) generateAttestationData() (*common.AttestationData, []byte, error) {
+func (p *Plugin) generateAttestationData() (*common.AttestationData, *attest.AK, error) {
 	tpm := p.tpm
 	if tpm == nil {
 		var err error
-		tpm, err = attest.OpenTPM(&attest.OpenConfig{
-			TPMVersion: attest.TPMVersion20,
-		})
+		tpm, err = attest.OpenTPM(&attest.OpenConfig{})
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to connect to tpm: %v", err)
 		}
@@ -194,15 +218,10 @@ func (p *Plugin) generateAttestationData() (*common.AttestationData, []byte, err
 		return nil, nil, err
 	}
 
-	aikBytes, err := ak.Marshal()
-	if err != nil {
-		return nil, nil, err
-	}
-
 	return &common.AttestationData{
 		EK: ekBytes,
 		AK: &params,
-	}, aikBytes, nil
+	}, ak, nil
 }
 
 func (p *Plugin) getConfig() *Config {

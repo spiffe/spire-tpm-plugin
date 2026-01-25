@@ -19,6 +19,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/bloomberg/spire-tpm-plugin/pkg/common"
 	"github.com/google/go-attestation/attest"
+	x509ext "github.com/google/go-attestation/x509"
 	"github.com/hashicorp/hcl"
 	nodeattestorv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/plugin/server/nodeattestor/v1"
 	configv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/service/common/config/v1"
@@ -147,6 +149,9 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 		}
 	}
 
+	var selectors []string
+	selectors = append(selectors, "pub_hash:"+hashEncoded)
+
 	if !validEK && p.config.CaPath != "" && ek.Certificate != nil {
 		files, err := os.ReadDir(p.config.CaPath)
 		if err != nil {
@@ -177,13 +182,30 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 			}
 		}
 
+		ekCert, err := x509ext.ToEKCertificate(ek.Certificate)
+		if err != nil {
+			return status.Errorf(codes.InvalidArgument, "tpm: could not parse EKCert: %v", err)
+		}
+
 		opts := x509.VerifyOptions{
 			Roots: roots,
+			// NOTE: the only ExtKeyUsage that TPM 2.0 sets is the optional 'tcg-kp-EKCertificate' key usage.
+			// This is already checked by the x509ext package.
+			// An empty KeyUsages defaults to x509.ExtKeyUsageServerAuth which is not set on EK Certs.
+			// Thus we MUST set this to ExtKeyUsageAny
+			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 		}
-		_, err = ek.Certificate.Verify(opts)
+		_, err = ekCert.Verify(opts)
 		if err != nil {
 			return fmt.Errorf("tpm: could not verify cert: %v", err)
 		}
+
+		selectors = append(selectors,
+			fmt.Sprintf("tpm_version:%s", ekCert.TpmVersion),
+			fmt.Sprintf("tpm_manufacturer:%s", ekCert.TpmManufacturer),
+			fmt.Sprintf("tpm_model:%s", ekCert.TpmModel),
+		)
+
 		validEK = true
 	}
 
@@ -192,9 +214,8 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 	}
 
 	ap := attest.ActivationParameters{
-		TPMVersion: attest.TPMVersion20,
-		EK:         ek.Public,
-		AK:         *attestationData.AK,
+		EK: ek.Public,
+		AK: *attestationData.AK,
 	}
 
 	secret, ec, err := ap.Generate()
@@ -233,21 +254,56 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 		return status.Errorf(codes.PermissionDenied, "tpm: incorrect secret from attestor")
 	}
 
+	// TODO: Keep protocol backwards compatible
+
+	akPublic, err := attest.ParseAKPublic(ap.AK.Public)
+	if err != nil {
+		return status.Errorf(codes.Internal, "tpm: unable to parse AK public key: %v", err)
+	}
+
+	akChallengeBytes := make([]byte, 32)
+	if _, err := rand.Read(akChallengeBytes); err != nil {
+		return err
+	}
+
+	if err := stream.Send(&nodeattestorv1.AttestResponse{
+		Response: &nodeattestorv1.AttestResponse_Challenge{
+			Challenge: akChallengeBytes,
+		},
+	}); err != nil {
+		return err
+	}
+
+	resp, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+
+	var platformParameters attest.PlatformParameters
+	if err := json.Unmarshal(resp.GetChallengeResponse(), &platformParameters); err != nil {
+		return err
+	}
+
+	if err := akPublic.VerifyAll(platformParameters.Quotes, platformParameters.PCRs, akChallengeBytes); err != nil {
+		return err
+	}
+
+	// Append PCR values to selectors
+	for _, pcr := range platformParameters.PCRs {
+		selectors = append(selectors, fmt.Sprintf("pcr:%s:%d:%x", pcr.DigestAlg, pcr.Index, pcr.Digest))
+	}
+
+	// TODO: In the future we could also add selectors for event log items.
+
 	return stream.Send(&nodeattestorv1.AttestResponse{
 		Response: &nodeattestorv1.AttestResponse_AgentAttributes{
 			AgentAttributes: &nodeattestorv1.AgentAttributes{
 				SpiffeId:       common.AgentID(p.config.trustDomain, hashEncoded),
-				SelectorValues: buildSelectors(hashEncoded),
+				SelectorValues: selectors,
 				CanReattest:    true,
 			},
 		},
 	})
-}
-
-func buildSelectors(pubHash string) []string {
-	var selectors []string
-	selectors = append(selectors, "pub_hash:"+pubHash)
-	return selectors
 }
 
 func (p *Plugin) getConfiguration() *Config {
