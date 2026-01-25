@@ -19,6 +19,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -252,6 +253,47 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 	if !bytes.Equal(secret, response.Secret) {
 		return status.Errorf(codes.PermissionDenied, "tpm: incorrect secret from attestor")
 	}
+
+	// TODO: Keep protocol backwards compatible
+
+	akPublic, err := attest.ParseAKPublic(ap.AK.Public)
+	if err != nil {
+		return status.Errorf(codes.Internal, "tpm: unable to parse AK public key: %v", err)
+	}
+
+	akChallengeBytes := make([]byte, 32)
+	if _, err := rand.Read(akChallengeBytes); err != nil {
+		return err
+	}
+
+	if err := stream.Send(&nodeattestorv1.AttestResponse{
+		Response: &nodeattestorv1.AttestResponse_Challenge{
+			Challenge: akChallengeBytes,
+		},
+	}); err != nil {
+		return err
+	}
+
+	resp, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+
+	var platformParameters attest.PlatformParameters
+	if err := json.Unmarshal(resp.GetChallengeResponse(), &platformParameters); err != nil {
+		return err
+	}
+
+	if err := akPublic.VerifyAll(platformParameters.Quotes, platformParameters.PCRs, akChallengeBytes); err != nil {
+		return err
+	}
+
+	// Append PCR values to selectors
+	for _, pcr := range platformParameters.PCRs {
+		selectors = append(selectors, fmt.Sprintf("pcr:%s:%d:%x", pcr.DigestAlg, pcr.Index, pcr.Digest))
+	}
+
+	// TODO: In the future we could also add selectors for event log items.
 
 	return stream.Send(&nodeattestorv1.AttestResponse{
 		Response: &nodeattestorv1.AttestResponse_AgentAttributes{
