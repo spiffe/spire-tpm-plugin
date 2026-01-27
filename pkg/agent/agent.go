@@ -45,6 +45,7 @@ type Plugin struct {
 
 type Config struct {
 	trustDomain string
+	TPMPath     string `hcl:"tpm_path"`
 }
 
 func (p *Plugin) Configure(ctx context.Context, req *configv1.ConfigureRequest) (*configv1.ConfigureResponse, error) {
@@ -67,6 +68,24 @@ func (p *Plugin) Configure(ctx context.Context, req *configv1.ConfigureRequest) 
 	p.config = config
 
 	return &configv1.ConfigureResponse{}, nil
+}
+
+func (p *Plugin) getOpenConfig() (*attest.OpenConfig, error) {
+	if p.config.TPMPath == "" {
+		return &attest.OpenConfig{
+			TPMVersion: attest.TPMVersion20,
+		}, nil
+	}
+
+	tpmSocket, err := common.OpenTPMSocket(p.config.TPMPath)
+	if err != nil {
+		return nil, fmt.Errorf("could not open %s: %w", p.config.TPMPath, err)
+	}
+
+	return &attest.OpenConfig{
+		TPMVersion:     attest.TPMVersion20,
+		CommandChannel: tpmSocket,
+	}, nil
 }
 
 func New() *Plugin {
@@ -134,11 +153,14 @@ func (p *Plugin) AidAttestation(stream nodeattestorv1.NodeAttestor_AidAttestatio
 
 func (p *Plugin) calculateResponse(ec *attest.EncryptedCredential, aikBytes []byte) (*common.ChallengeResponse, error) {
 	tpm := p.tpm
+
 	if tpm == nil {
 		var err error
-		tpm, err = attest.OpenTPM(&attest.OpenConfig{
-			TPMVersion: attest.TPMVersion20,
-		})
+		oc, err := p.getOpenConfig()
+		if err != nil {
+			return nil, err
+		}
+		tpm, err = attest.OpenTPM(oc)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to tpm: %v", err)
 		}
@@ -162,11 +184,14 @@ func (p *Plugin) calculateResponse(ec *attest.EncryptedCredential, aikBytes []by
 
 func (p *Plugin) generateAttestationData() (*common.AttestationData, []byte, error) {
 	tpm := p.tpm
+
 	if tpm == nil {
 		var err error
-		tpm, err = attest.OpenTPM(&attest.OpenConfig{
-			TPMVersion: attest.TPMVersion20,
-		})
+		oc, err := p.getOpenConfig()
+		if err != nil {
+			return nil, nil, err
+		}
+		tpm, err = attest.OpenTPM(oc)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to connect to tpm: %v", err)
 		}
