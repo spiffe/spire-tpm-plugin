@@ -14,7 +14,7 @@ COPY . .
 
 RUN TARGETOS=${TARGETOS} TARGETARCH=${TARGETARCH} BINARY=${BINARY} make docker-build
 
-FROM --platform=${TARGETPLATFORM} alpine:3.17
+FROM --platform=${TARGETPLATFORM} alpine:3.20
 
 WORKDIR /app
 
