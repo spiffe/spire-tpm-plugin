@@ -1,12 +1,10 @@
 FROM golang:latest AS go
 
-FROM ubuntu:20.04
-
-RUN addgroup --gid 1000 docker \
-    && adduser --uid 1000 --ingroup docker --home /home/docker --shell /bin/sh --disabled-password --gecos "" docker
+FROM ubuntu:24.04
 
 RUN apt-get update \
     && apt-get install -y \
+        adduser \
         curl \
         gcc \
         libtspi-dev \
@@ -14,6 +12,9 @@ RUN apt-get update \
         pwgen \
         tpm2-tools \
         xxd
+
+RUN addgroup --gid 1001 docker \
+    && adduser --uid 1001 --ingroup docker --home /home/docker --shell /bin/sh --disabled-password --gecos "" docker
 
 RUN USER=docker \
     && GROUP=docker \
