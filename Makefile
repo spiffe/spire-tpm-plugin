@@ -1,7 +1,7 @@
 .ONESHELL:
 
 BINARIES ?= tpm_attestor_server tpm_attestor_agent get_tpm_pubhash
-OSES ?= linux windows
+OSES ?= linux windows darwin
 ARCHITECTURES ?= amd64 arm64
 VERSION ?= develop
 DOCKER_REGISTRY ?= ghcr.io
