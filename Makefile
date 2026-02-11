@@ -1,7 +1,7 @@
 .ONESHELL:
 
 BINARIES ?= tpm_attestor_server tpm_attestor_agent get_tpm_pubhash
-OSES ?= linux
+OSES ?= linux windows
 ARCHITECTURES ?= amd64 arm64
 VERSION ?= develop
 DOCKER_REGISTRY ?= ghcr.io
@@ -15,15 +15,16 @@ RELEASE_TARGETS := $(foreach build, $(BUILD_TARGETS), $(build)-release)
 DOCKER_TARGETS := $(foreach binary, $(BINARIES), $(binary)-docker)
 
 target_words = $(subst -, ,$@)
-target_binary = $(word 1, $(target_words))
 target_os = $(word 2, $(target_words))
+target_ext = $(if $(filter windows,$(target_os)),.exe,)
 target_architecture = $(word 3, $(target_words))
+target_binary = $(word 1, $(target_words))
 
 target_binary_hyphens = $(subst _,-,$(target_binary))
 
 build: $(BUILD_TARGETS)
 $(BUILD_TARGETS):
-	CGO_ENABLED=0 GOOS=$(target_os) GOARCH=$(target_architecture) go build -ldflags="-s -w -extldflags -static" -o $(BUILD_DIR)/$(target_os)/$(target_architecture)/$(target_binary) cmd/$(target_binary)/main.go
+	CGO_ENABLED=0 GOOS=$(target_os) GOARCH=$(target_architecture) go build -ldflags="-s -w -extldflags -static" -o $(BUILD_DIR)/$(target_os)/$(target_architecture)/$(target_binary)$(target_ext) cmd/$(target_binary)/main.go
 
 test:
 	go test ./...
@@ -31,7 +32,7 @@ test:
 release: $(RELEASE_TARGETS)
 $(RELEASE_TARGETS):
 	mkdir -p releases
-	tar -cvzf $(RELEASES_DIR)/spire_tpm_plugin_$(target_binary)_$(target_os)_$(target_architecture)_$(VERSION).tar.gz -C $(BUILD_DIR)/$(target_os)/$(target_architecture) $(target_binary)
+	tar -cvzf $(RELEASES_DIR)/spire_tpm_plugin_$(target_binary)_$(target_os)_$(target_architecture)_$(VERSION).tar.gz -C $(BUILD_DIR)/$(target_os)/$(target_architecture) $(target_binary)$(target_ext)
 
 docker: $(DOCKER_TARGETS)
 $(DOCKER_TARGETS):
