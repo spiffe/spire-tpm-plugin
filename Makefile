@@ -2,6 +2,7 @@
 
 BINARIES ?= tpm_attestor_server tpm_attestor_agent get_tpm_pubhash
 OSES ?= linux windows darwin
+CONTAINEROSES ?= linux
 ARCHITECTURES ?= amd64 arm64
 VERSION ?= develop
 DOCKER_REGISTRY ?= ghcr.io
@@ -9,6 +10,7 @@ DOCKER_REPOSITORY_PREFIX ?= spiffe/spire-tpm-plugin
 BUILD_DIR ?= ./build
 RELEASES_DIR ?= ./releases
 PLATFORMS ?= $(foreach os, $(OSES), $(foreach architecture, $(ARCHITECTURES), --platform $(os)/$(architecture)))
+CONTAINERPLATFORMS ?= $(foreach os, $(CONTAINEROSES), $(foreach architecture, $(ARCHITECTURES), --platform $(os)/$(architecture)))
 
 BUILD_TARGETS := $(foreach binary, $(BINARIES), $(foreach os, $(OSES), $(foreach architecture, $(ARCHITECTURES), $(binary)-$(os)-$(architecture))))
 RELEASE_TARGETS := $(foreach build, $(BUILD_TARGETS), $(build)-release)
@@ -36,7 +38,7 @@ $(RELEASE_TARGETS):
 
 docker: $(DOCKER_TARGETS)
 $(DOCKER_TARGETS):
-	docker build $(PLATFORMS) --build-arg BINARY=$(target_binary) -t $(DOCKER_REGISTRY)/$(DOCKER_REPOSITORY_PREFIX)-$(target_binary_hyphens):$(VERSION) . --push
+	docker build $(CONTAINERPLATFORMS) --build-arg BINARY=$(target_binary) -t $(DOCKER_REGISTRY)/$(DOCKER_REPOSITORY_PREFIX)-$(target_binary_hyphens):$(VERSION) . --push
 
 docker-build:
 	CGO_ENABLED=0 GOOS=$(TARGETOS) GOARCH=$(TARGETARCH) go build -ldflags="-s -w -extldflags -static" -o ${BINARY} cmd/${BINARY}/main.go
