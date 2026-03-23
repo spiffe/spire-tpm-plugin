@@ -21,8 +21,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/google/go-attestation/attest"
 	nodeattestorv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/plugin/agent/nodeattestor/v1"
 	configv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/service/common/config/v1"
@@ -44,7 +49,18 @@ type Plugin struct {
 }
 
 type Config struct {
-	trustDomain string
+	trustDomain        string
+	aws                *AWSConfig `hcl:"aws"`
+	pve                *PVEConfig `hcl:"pve"`
+}
+
+type AWSConfig struct {
+	enabled         bool   `hcl:"enabled"`
+	discoveryMethod string `hcl:"discovery_method"` // "", "smbios" or "metadata"
+}
+
+type PVEConfig struct {
+	enabled         bool   `hcl:"enabled"`
 }
 
 func (p *Plugin) Configure(ctx context.Context, req *configv1.ConfigureRequest) (*configv1.ConfigureResponse, error) {
@@ -79,7 +95,7 @@ func (p *Plugin) AidAttestation(stream nodeattestorv1.NodeAttestor_AidAttestatio
 		return status.Error(codes.FailedPrecondition, "plugin not configured")
 	}
 
-	attestationData, aik, err := p.generateAttestationData()
+	attestationData, aik, err := p.generateAttestationData(stream.Context())
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to generate attestation data: %v", err)
 	}
@@ -158,7 +174,7 @@ func (p *Plugin) calculateResponse(ec *attest.EncryptedCredential, aikBytes []by
 	}, nil
 }
 
-func (p *Plugin) generateAttestationData() (*common.AttestationData, []byte, error) {
+func (p *Plugin) generateAttestationData(ctx context.Context) (*common.AttestationData, []byte, error) {
 	tpm := p.tpm
 	if tpm == nil {
 		var err error
@@ -195,10 +211,69 @@ func (p *Plugin) generateAttestationData() (*common.AttestationData, []byte, err
 		return nil, nil, err
 	}
 
-	return &common.AttestationData{
+	data := &common.AttestationData{
 		EK: ekBytes,
 		AK: &params,
-	}, aikBytes, nil
+	}
+
+	conf := p.getConfig()
+	if conf.aws != nil && conf.aws.enabled {
+		method := strings.ToLower(conf.aws.discoveryMethod)
+		if method == "" {
+			method = "smbios"
+		}
+
+		switch method {
+		case "metadata":
+			cfg, err := config.LoadDefaultConfig(ctx)
+			if err == nil {
+				imdsClient := imds.NewFromConfig(cfg)
+				output, err := imdsClient.GetInstanceIdentityDocument(ctx, &imds.GetInstanceIdentityDocumentInput{})
+				if err == nil && output.InstanceIdentityDocument.InstanceID != "" {
+					data.AWS.InstanceID = output.InstanceIdentityDocument.InstanceID
+				}
+			}
+		case "smbios":
+			data.AWS.InstanceID = p.getAWSInstanceIDFromSMBIOS()
+		default:
+			return nil, nil, fmt.Errorf("bad method")
+		}
+	}
+
+	if conf.pve != nil && conf.pve.enabled {
+		data.PVE.UUID = p.getPVEUUIDFromSMBIOS()
+		data.PVE.VMID = p.getPVEVMIDFromSMBIOS()
+	}
+
+	return data, aikBytes, nil
+}
+
+func (p *Plugin) getAWSInstanceIDFromSMBIOS() string {
+	data, err := os.ReadFile("/sys/devices/virtual/dmi/id/board_asset_tag")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func (p *Plugin) getPVEVMIDFromSMBIOS() int32 {
+	data, err := os.ReadFile("/sys/devices/virtual/dmi/id/product_serial")
+	if err != nil {
+		return -1
+	}
+	i64, err := strconv.ParseInt(string(data), 10, 32)
+	if err != nil {
+		return -1
+	}
+	return int32(i64)
+}
+
+func (p *Plugin) getPVEUUIDFromSMBIOS() string {
+	data, err := os.ReadFile("/sys/devices/virtual/dmi/id/product_uuid")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func (p *Plugin) getConfig() *Config {
