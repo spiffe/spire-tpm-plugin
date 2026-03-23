@@ -19,18 +19,26 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/bloomberg/spire-tpm-plugin/pkg/common"
 	"github.com/google/go-attestation/attest"
 	x509ext "github.com/google/go-attestation/x509"
 	"github.com/hashicorp/hcl"
+	identityproviderv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/hostservice/server/identityprovider/v1"
 	nodeattestorv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/plugin/server/nodeattestor/v1"
 	configv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/service/common/config/v1"
 	"google.golang.org/grpc/codes"
@@ -41,14 +49,28 @@ type Config struct {
 	trustDomain string
 	CaPath      string `hcl:"ca_path"`
 	HashPath    string `hcl:"hash_path"`
+	AWS         AWSConfig `hcl:"aws"`
+	PVE         PVEConfig `hcl:"pve"`
 }
+
+type AWSConfig struct {
+	Enabled bool `hcl:"enabled"`
+	ValidateWithHashPath *bool `hcl:"validate_hash_path"`
+}
+
+type PVEConfig struct {
+	Enabled bool `hcl:"enabled"`
+	ValidateWithHashPath *bool `hcl:"validate_hash_path"`
+}
+
 
 // Plugin implements the nodeattestor Plugin interface
 type Plugin struct {
 	nodeattestorv1.UnsafeNodeAttestorServer
 	configv1.UnsafeConfigServer
-	config *Config
-	m      sync.Mutex
+	config           *Config
+	m                sync.Mutex
+	identityProvider identityproviderv1.IdentityProviderServiceClient
 }
 
 func New() *Plugin {
@@ -139,10 +161,40 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 		return status.Errorf(codes.InvalidArgument, "tpm: could not get public key hash: %v", err)
 	}
 
+	var selectors []string
 	validEK := false
+	if p.config.AWS.Enabled && attestationData.AWS.InstanceID != "" {
+		pubBytes, _ := x509.MarshalPKIXPublicKey(ek.Public)
+		awsSelectors, err := p.verifyAWSTPM(stream.Context(), attestationData.AWS.InstanceID, pubBytes)
+		if err == nil {
+			selectors = append(selectors, awsSelectors...)
 
-	if p.config.HashPath != "" {
-		validEK = checkHashAllowed(p.config.HashPath, hashEncoded)
+			if p.config.AWS.ValidateWithHashPath == nil || (p.config.AWS.ValidateWithHashPath != nil && *p.config.AWS.ValidateWithHashPath == true) {
+				validEK = checkHashAllowed(p.config.HashPath, hashEncoded)
+			} else {
+				validEK = true
+			}
+		}
+	} else if p.config.PVE.Enabled && attestationData.PVE.VMID > 0 && attestationData.PVE.UUID != "" {
+		resp, err := p.identityProvider.FetchX509Identity(stream.Context(), &identityproviderv1.FetchX509IdentityRequest{})
+		if err != nil {
+			return status.Errorf(codes.InvalidArgument, "tpm: something went wrong getting our identity: %v", err)
+		}
+		pubBytes, _ := x509.MarshalPKIXPublicKey(ek.Public)
+		pveSelectors, err := p.verifyPVETPM(stream.Context(), attestationData.PVE, pubBytes, resp)
+		if err == nil {
+			selectors = append(selectors, pveSelectors...)
+			if p.config.PVE.ValidateWithHashPath == nil || (p.config.PVE.ValidateWithHashPath != nil && *p.config.PVE.ValidateWithHashPath == true) {
+				validEK = checkHashAllowed(p.config.HashPath, hashEncoded)
+			} else {
+				validEK = true
+			}
+		}
+
+	} else {
+		if p.config.HashPath != "" {
+			validEK = checkHashAllowed(p.config.HashPath, hashEncoded)
+		}
 	}
 
 	if !validEK && p.config.CaPath != "" && ek.Certificate != nil {
@@ -240,15 +292,102 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 		return status.Errorf(codes.PermissionDenied, "tpm: incorrect secret from attestor")
 	}
 
+	selectors = append(selectors, "pub_hash:"+hashEncoded)
 	return stream.Send(&nodeattestorv1.AttestResponse{
 		Response: &nodeattestorv1.AttestResponse_AgentAttributes{
 			AgentAttributes: &nodeattestorv1.AgentAttributes{
 				SpiffeId:       common.AgentID(p.config.trustDomain, hashEncoded),
-				SelectorValues: buildSelectors(hashEncoded),
+				SelectorValues: selectors,
 				CanReattest:    true,
 			},
 		},
 	})
+}
+
+func (p *Plugin) verifyAWSTPM(ctx context.Context, instanceID string, ekPub []byte) ([]string, error) {
+	//FIXME make this configurable
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	client := ec2.NewFromConfig(cfg)
+	out, err := client.GetInstanceTpmEkPub(ctx, &ec2.GetInstanceTpmEkPubInput{
+		InstanceId: aws.String(instanceID),
+		KeyFormat:  "der",
+		KeyType:    "rsa-2048",
+	})
+	if err != nil {
+		return nil, err
+	}
+	decodedAWSKey, _ := base64.StdEncoding.DecodeString(*out.KeyValue)
+	if !bytes.Equal(decodedAWSKey, ekPub) {
+		return nil, errors.New("EK mismatch")
+	}
+	return []string{"aws:instance_id:" + instanceID}, nil
+}
+
+func (p *Plugin) verifyPVETPM(ctx context.Context, pveid *common.PVEInstanceData, ekPub []byte, identity *identityproviderv1.FetchX509IdentityResponse) ([]string, error) {
+//FIXME unhardcode these
+	node := "test.example.org"
+	expectedSpiffeID := "spiffe://example.org/node/proxmox"
+	fullURL, _ := url.JoinPath("https://" + node, "get-ek-cert", string(pveid.VMID), pveid.UUID)
+	i := identity.GetIdentity()
+	if i == nil {
+		return nil, fmt.Errorf("no identity found in response")
+	}
+
+	cert, err := tls.X509KeyPair(bytes.Join(i.CertChain, []byte("\n")), i.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse client certificate/key: %w", err)
+	}
+
+	certPool := x509.NewCertPool()
+	for _, authority := range identity.Bundle.X509Authorities {
+		cert, err := x509.ParseCertificate(authority.Asn1)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse trust bundle")
+		}
+		certPool.AddCert(cert)
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				RootCAs:      certPool,
+				InsecureSkipVerify: true,
+				VerifyConnection: func(cs tls.ConnectionState) error {
+					opts := x509.VerifyOptions{
+						Roots:         certPool,
+						Intermediates: x509.NewCertPool(),
+					}
+					for _, c := range cs.PeerCertificates[1:] {
+						opts.Intermediates.AddCert(c)
+					}
+					_, err := cs.PeerCertificates[0].Verify(opts)
+					if err != nil {
+						return fmt.Errorf("failed to verify certificate chain: %w", err)
+					}
+					for _, uri := range cs.PeerCertificates[0].URIs {
+						if uri.String() == expectedSpiffeID {
+							return nil
+						}
+					}
+					return errors.New("remote SPIFFE ID did not match expected value")
+				},
+			},
+		},
+	}
+	res, err := client.Get(fullURL)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer res.Body.Close()
+
+	fmt.Printf("Success! Status: %s\n", res.Status)
+	//TrustDomain:     v1.s.config.TrustDomain.Name(),
+	//selectors := []string{"pve:vm_id:" + string(pveid.VMID), "pve:uuid:" + pveid.UUID}
+	return nil, errors.New("Unimplemented")
 }
 
 func checkHashAllowed(hashPath, hashEncoded string) bool {
@@ -263,12 +402,6 @@ func checkHashAllowed(hashPath, hashEncoded string) bool {
 		return true
 	}
 	return false
-}
-
-func buildSelectors(pubHash string) []string {
-	var selectors []string
-	selectors = append(selectors, "pub_hash:"+pubHash)
-	return selectors
 }
 
 func (p *Plugin) getConfiguration() *Config {

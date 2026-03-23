@@ -24,9 +24,12 @@ target_binary = $(word 1, $(target_words))
 
 target_binary_hyphens = $(subst _,-,$(target_binary))
 
-build: $(BUILD_TARGETS)
+build: $(BUILD_TARGETS) spiffe-pve-ek
 $(BUILD_TARGETS):
 	CGO_ENABLED=0 GOOS=$(target_os) GOARCH=$(target_architecture) go build -ldflags="-s -w -extldflags -static" -o $(BUILD_DIR)/$(target_os)/$(target_architecture)/$(target_binary)$(target_ext) cmd/$(target_binary)/main.go
+
+spiffe-pve-ek:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -extldflags -static" -o $(BUILD_DIR)/linux/amd64/spiffe-pve-ek cmd/spiffe-pve-ek/main.go
 
 test:
 	go test ./...
