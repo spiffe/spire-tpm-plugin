@@ -26,6 +26,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/google/go-attestation/attest"
 	nodeattestorv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/plugin/agent/nodeattestor/v1"
 	configv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/service/common/config/v1"
@@ -48,7 +50,13 @@ type Plugin struct {
 
 type Config struct {
 	trustDomain        string
+	AWS                AWSConfig `hcl:"aws"`
 	PVE                PVEConfig `hcl:"pve"`
+}
+
+type AWSConfig struct {
+	Enabled         bool   `hcl:"enabled"`
+	DiscoveryMethod string `hcl:"discovery_method"` // "", "smbios" or "metadata"
 }
 
 type PVEConfig struct {
@@ -215,6 +223,29 @@ func (p *Plugin) generateAttestationData(ctx context.Context) (*common.Attestati
 	}
 
 	conf := p.getConfig()
+	if conf.AWS.Enabled {
+		data.AWS = &common.AWSInstanceData{}
+		method := strings.ToLower(conf.AWS.DiscoveryMethod)
+		if method == "" {
+			method = "smbios"
+		}
+
+		switch method {
+		case "metadata":
+			cfg, err := config.LoadDefaultConfig(ctx)
+			if err == nil {
+				imdsClient := imds.NewFromConfig(cfg)
+				output, err := imdsClient.GetInstanceIdentityDocument(ctx, &imds.GetInstanceIdentityDocumentInput{})
+				if err == nil && output.InstanceIdentityDocument.InstanceID != "" {
+					data.AWS.InstanceID = output.InstanceIdentityDocument.InstanceID
+				}
+			}
+		case "smbios":
+			data.AWS.InstanceID = p.getAWSInstanceIDFromSMBIOS()
+		default:
+			return nil, nil, fmt.Errorf("bad method")
+		}
+	}
 
 	if conf.PVE.Enabled {
 		data.PVE = &common.PVEInstanceData{
@@ -225,6 +256,14 @@ func (p *Plugin) generateAttestationData(ctx context.Context) (*common.Attestati
 	}
 
 	return data, aikBytes, nil
+}
+
+func (p *Plugin) getAWSInstanceIDFromSMBIOS() string {
+	data, err := os.ReadFile("/sys/devices/virtual/dmi/id/board_asset_tag")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func (p *Plugin) getPVEVMIDFromSMBIOS() int32 {
