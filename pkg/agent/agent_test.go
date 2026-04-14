@@ -30,8 +30,16 @@ var (
 	trustDomain            = "domain.test"
 	hashExpected           = "1b5bbe2e96054f7bc34ebe7ba9a4a9eac5611c6879285ceff6094fa556af485c"
 	selectorValuesExpected = []string{"pub_hash:" + hashExpected}
-	idExpected             = "spiffe://" + trustDomain + "/spire/agent/tpm/" + hashExpected
-	invalidHash            = "0000000000000000000000000000000000000000000000000000000000000000"
+	// selectorValuesCAExpected is the expected selectors when CA validation is used.
+	// The tpm_* values are fixed because the simulator is seeded with 0.
+	selectorValuesCAExpected = []string{
+		"version:id:00020008",
+		"manufacturer:id:123456EF",
+		"model:id:00000000",
+		"pub_hash:" + hashExpected,
+	}
+	idExpected  = "spiffe://" + trustDomain + "/spire/agent/tpm/" + hashExpected
+	invalidHash = "0000000000000000000000000000000000000000000000000000000000000000"
 	invalidCAPEM           = []byte(`-----BEGIN CERTIFICATE-----
 MIIDjDCCAnSgAwIBAgIUWe6uPQG5Z+xnccBoXH9ui6dORgMwDQYJKoZIhvcNAQEL
 BQAwYTEZMBcGA1UECgwQVFBNIE1hbnVmYWN0dXJlcjEhMB8GA1UECwwYVFBNIE1h
@@ -81,26 +89,30 @@ func TestAttestor(t *testing.T) {
 	}
 
 	testCases := []struct {
-		name           string
-		emptyCA        bool
-		err            string
-		hcl            string
-		pemEncodeCAs   bool
-		validateCAs    []*x509.Certificate
-		validateHashes []string
+		name             string
+		emptyCA          bool
+		err              string
+		hcl              string
+		pemEncodeCAs     bool
+		validateCAs      []*x509.Certificate
+		validateHashes   []string
+		expectedSelectors []string
 	}{
 		{
-			name:         "valid CA certificate PEM format",
-			validateCAs:  []*x509.Certificate{tpmCACert},
-			pemEncodeCAs: true,
+			name:              "valid CA certificate PEM format",
+			validateCAs:       []*x509.Certificate{tpmCACert},
+			pemEncodeCAs:      true,
+			expectedSelectors: selectorValuesCAExpected,
 		},
 		{
-			name:        "valid CA certificate DER format",
-			validateCAs: []*x509.Certificate{tpmCACert},
+			name:              "valid CA certificate DER format",
+			validateCAs:       []*x509.Certificate{tpmCACert},
+			expectedSelectors: selectorValuesCAExpected,
 		},
 		{
-			name:        "valid multiple CAs",
-			validateCAs: []*x509.Certificate{tpmCACert, invalidCA},
+			name:              "valid multiple CAs",
+			validateCAs:       []*x509.Certificate{tpmCACert, invalidCA},
+			expectedSelectors: selectorValuesCAExpected,
 		},
 		{
 			name:           "valid hash",
@@ -111,9 +123,10 @@ func TestAttestor(t *testing.T) {
 			validateHashes: []string{hashExpected},
 		},
 		{
-			name:           "valid CA, invalid hash",
-			validateCAs:    []*x509.Certificate{tpmCACert},
-			validateHashes: []string{invalidHash},
+			name:              "valid CA, invalid hash",
+			validateCAs:       []*x509.Certificate{tpmCACert},
+			validateHashes:    []string{invalidHash},
+			expectedSelectors: selectorValuesCAExpected,
 		},
 		{
 			name:           "valid hash, invalid CA",
@@ -168,7 +181,11 @@ func TestAttestor(t *testing.T) {
 			require.NoError(err)
 			require.NotNil(attribs)
 			require.Equal(idExpected, attribs.SpiffeId)
-			require.Equal(selectorValuesExpected, attribs.SelectorValues)
+			expectedSelectors := selectorValuesExpected
+			if testCase.expectedSelectors != nil {
+				expectedSelectors = testCase.expectedSelectors
+			}
+			require.Equal(expectedSelectors, attribs.SelectorValues)
 		})
 	}
 }

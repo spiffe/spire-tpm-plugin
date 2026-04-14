@@ -244,6 +244,13 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 		if err != nil {
 			return fmt.Errorf("tpm: could not verify cert: %v", err)
 		}
+
+		selectors = append(selectors,
+			fmt.Sprintf("version:%s", ekCert.TpmVersion),
+			fmt.Sprintf("manufacturer:%s", ekCert.TpmManufacturer),
+			fmt.Sprintf("model:%s", ekCert.TpmModel),
+		)
+
 		validEK = true
 	}
 
