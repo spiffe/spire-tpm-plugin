@@ -15,6 +15,32 @@ my $phase = shift;
 if ($phase eq 'pre-start') {
     print "TPM-ATTESTOR: Starting extraction for VM $vmid\n";
 
+    my $source_node = $ENV{PVE_MIGRATED_FROM};
+    my $tmp_dir = "/var/lib/swtpm/$vmid";
+
+    make_path($tmp_dir) if !-d $tmp_dir;
+
+    if ($source_node) {
+        print "TPM-ATTESTOR: Live migration detected from $source_node. Syncing metadata...\n";
+        eval {
+            run_command([
+                'scp',
+                '-o', 'BatchMode=yes',
+                '-o', 'StrictHostKeyChecking=no',
+                "${source_node}:$tmp_dir/ek.pem",
+                "${source_node}:$tmp_dir/uuid",
+                $tmp_dir
+            ]);
+        };
+        if ($@) {
+            warn "TPM-ATTESTOR: Failed to sync EK/UUID from source node $source_node: $@\n";
+	    exit(1);
+        } else {
+            print "TPM-ATTESTOR: Successfully migrated TPM metadata via SCP.\n";
+            exit(0);
+        }
+    }
+
     # Load environment variables from default.env if it exists
     my $env_file = '/etc/spiffe/pve-ek/default.env';
     if (-f $env_file) {
@@ -79,13 +105,11 @@ if ($phase eq 'pre-start') {
     }
 
     my ($tpm_volid) = $conf->{$tpm_key} =~ m/^([^,]+)/;
-    my $tmp_dir = "/var/lib/swtpm/$vmid";
     my $state_file = "$tmp_dir/tpm2-0.0.scope";
     my $ek_path = "$tmp_dir/ek.der";
     my $uuid_path = "$tmp_dir/uuid";
 
     eval {
-        make_path($tmp_dir) if !-d $tmp_dir;
 
         open(my $fh, '>', $uuid_path);
         print $fh $uuid;
