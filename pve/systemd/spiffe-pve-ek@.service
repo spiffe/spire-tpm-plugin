@@ -4,6 +4,9 @@ After=network-online.target local-fs.target time-sync.target
 Wants=network-online.target local-fs.target time-sync.target spire-agent.target
 StartLimitIntervalSec=0
 
+[Install]
+WantedBy=multi-user.target
+
 [Service]
 WorkingDirectory=/var/lib/spire/agent/%i
 StateDirectory=swtpm

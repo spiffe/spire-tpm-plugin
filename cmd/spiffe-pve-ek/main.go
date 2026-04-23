@@ -30,7 +30,7 @@ type VmList struct {
 
 func main() {
 	allowedIDStr := flag.String("spiffeid", "", "The client SPIFFE ID allowed to connect")
-	port := flag.String("port", "8443", "HTTPS port to listen on")
+	port := flag.String("port", "9443", "HTTPS port to listen on")
 	domain := flag.String("domain", "", "Domain to append to node names for FQDN (e.g. 'example.com')")
 	flag.Parse()
 

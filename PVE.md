@@ -35,7 +35,7 @@ NodeAttestor "tpm" {
                     "hypervisor2.exmaple.com",
                     "hypervisor3.exmaple.com"
                 ]
-                #port = 8443
+                #port = 9443
                 #expected_spiffe_id = "spiffe://example.com/spiffe-pve-ek"
                 #hash_path = "/etc/spire/server/${SYSTEMD_INSTANCE}/tpm-direct/pve-hashes"
             }
