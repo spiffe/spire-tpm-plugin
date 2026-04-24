@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,9 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/bloomberg/spire-tpm-plugin/pkg/common"
 	"github.com/google/go-attestation/attest"
 	x509ext "github.com/google/go-attestation/x509"
@@ -43,7 +47,13 @@ type Config struct {
 	trustDomain string
 	CaPath      string          `hcl:"ca_path"`
 	HashPath    string          `hcl:"hash_path"`
+	AWS         AWSConfig       `hcl:"aws"`
 	PVE         PVEGlobalConfig `hcl:"pve"`
+}
+
+type AWSConfig struct {
+	Enabled      bool    `hcl:"enabled"`
+	HashPath     string  `hcl:"hash_path"`
 }
 
 // Plugin implements the nodeattestor Plugin interface
@@ -162,7 +172,22 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 	var selectors []string
 	caCheck := false
 	validEK := false
-	if p.config.PVE.Enabled && attestationData.PVE != nil {
+	if p.config.AWS.Enabled && attestationData.AWS != nil {
+		if attestationData.AWS.InstanceID == "" {
+			return fmt.Errorf("tpm: bad aws data")
+		}
+		pubBytes, _ := x509.MarshalPKIXPublicKey(ek.Public)
+		awsSelectors, err := p.verifyAWSTPM(stream.Context(), attestationData.AWS.InstanceID, pubBytes)
+		if err == nil {
+			selectors = append(selectors, awsSelectors...)
+
+			if p.config.AWS.HashPath != "" {
+				validEK = checkHashAllowed(p.config.AWS.HashPath, hashEncoded)
+			} else {
+				validEK = true
+			}
+		}
+	} else if p.config.PVE.Enabled && attestationData.PVE != nil {
 		clusterConf, ok := p.config.PVE.Clusters[attestationData.PVE.CUID]
 		hashPath := p.config.PVE.Clusters[attestationData.PVE.CUID].HashPath
 		if !ok {
@@ -309,6 +334,27 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 			},
 		},
 	})
+}
+
+func (p *Plugin) verifyAWSTPM(ctx context.Context, instanceID string, ekPub []byte) ([]string, error) {
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	client := ec2.NewFromConfig(cfg)
+	out, err := client.GetInstanceTpmEkPub(ctx, &ec2.GetInstanceTpmEkPubInput{
+		InstanceId: aws.String(instanceID),
+		KeyFormat:  "der",
+		KeyType:    "rsa-2048",
+	})
+	if err != nil {
+		return nil, err
+	}
+	decodedAWSKey, _ := base64.StdEncoding.DecodeString(*out.KeyValue)
+	if !bytes.Equal(decodedAWSKey, ekPub) {
+		return nil, errors.New("EK mismatch")
+	}
+	return []string{"aws:instance_id:" + instanceID}, nil
 }
 
 func checkHashAllowed(hashPath, hashEncoded string) bool {
