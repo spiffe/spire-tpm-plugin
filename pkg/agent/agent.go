@@ -148,7 +148,6 @@ func (p *Plugin) AidAttestation(stream nodeattestorv1.NodeAttestor_AidAttestatio
 		return status.Errorf(status.Code(err), "unable to send challenge response: %v", err)
 	}
 
-	// TODO: keep protocol backwards compatible
 	if p.config.PCR.Enabled {
 		resp, err = stream.Recv()
 		if err != nil {

@@ -307,7 +307,6 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 
 	selectors = append(selectors, "pub_hash:"+hashEncoded)
 
-	// TODO: Keep protocol backwards compatible
 	if p.config.PCR.Enabled {
 		akPublic, err := attest.ParseAKPublic(ap.AK.Public)
 		if err != nil {
@@ -346,7 +345,14 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 			selectors = append(selectors, fmt.Sprintf("pcr:%s:%d:%x", pcr.DigestAlg, pcr.Index, pcr.Digest))
 		}
 
-		// TODO: In the future we could also add selectors for event log items.
+		// Append secureboot semantic label by parsing eventlog and verifying events
+		if enabled, err := parseSecureBootState(&platformParameters); err == nil {
+			if enabled {
+				selectors = append(selectors, "secureboot:enabled")
+			} else {
+				selectors = append(selectors, "secureboot:disabled")
+			}
+		}
 	}
 	return stream.Send(&nodeattestorv1.AttestResponse{
 		Response: &nodeattestorv1.AttestResponse_AgentAttributes{
@@ -357,6 +363,25 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 			},
 		},
 	})
+}
+
+func parseSecureBootState(platformParameters *attest.PlatformParameters) (bool, error) {
+	eventLog, err := attest.ParseEventLog(platformParameters.EventLog)
+	if err != nil {
+		return false, fmt.Errorf(("error parsing eventlog: %v"), err)
+	}
+
+	events, err := eventLog.Verify(platformParameters.PCRs)
+	if err != nil {
+		return false, fmt.Errorf(("error verifying events: %v"), err)
+	}
+
+	sbState, err := attest.ParseSecurebootState(events)
+	if err != nil {
+		return false, fmt.Errorf(("error parsing secureboot state: %v"), err)
+	}
+
+	return sbState.Enabled, nil
 }
 
 func checkHashAllowed(hashPath, hashEncoded string) bool {
