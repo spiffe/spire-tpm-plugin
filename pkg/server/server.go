@@ -45,6 +45,11 @@ type Config struct {
 	CaPath      string          `hcl:"ca_path"`
 	HashPath    string          `hcl:"hash_path"`
 	PVE         PVEGlobalConfig `hcl:"pve"`
+	PCR         PCRConfig       `hcl:"pcr"`
+}
+
+type PCRConfig struct {
+	Enabled bool `hcl:"enabled"`
 }
 
 // Plugin implements the nodeattestor Plugin interface
@@ -303,46 +308,46 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 	selectors = append(selectors, "pub_hash:"+hashEncoded)
 
 	// TODO: Keep protocol backwards compatible
+	if p.config.PCR.Enabled {
+		akPublic, err := attest.ParseAKPublic(ap.AK.Public)
+		if err != nil {
+			return status.Errorf(codes.Internal, "tpm: unable to parse AK public key: %v", err)
+		}
 
-	akPublic, err := attest.ParseAKPublic(ap.AK.Public)
-	if err != nil {
-		return status.Errorf(codes.Internal, "tpm: unable to parse AK public key: %v", err)
+		akChallengeBytes := make([]byte, 32)
+		if _, err := rand.Read(akChallengeBytes); err != nil {
+			return err
+		}
+
+		if err := stream.Send(&nodeattestorv1.AttestResponse{
+			Response: &nodeattestorv1.AttestResponse_Challenge{
+				Challenge: akChallengeBytes,
+			},
+		}); err != nil {
+			return err
+		}
+
+		resp, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+
+		var platformParameters attest.PlatformParameters
+		if err := json.Unmarshal(resp.GetChallengeResponse(), &platformParameters); err != nil {
+			return err
+		}
+
+		if err := akPublic.VerifyAll(platformParameters.Quotes, platformParameters.PCRs, akChallengeBytes); err != nil {
+			return err
+		}
+
+		// Append PCR values to selectors
+		for _, pcr := range platformParameters.PCRs {
+			selectors = append(selectors, fmt.Sprintf("pcr:%s:%d:%x", pcr.DigestAlg, pcr.Index, pcr.Digest))
+		}
+
+		// TODO: In the future we could also add selectors for event log items.
 	}
-
-	akChallengeBytes := make([]byte, 32)
-	if _, err := rand.Read(akChallengeBytes); err != nil {
-		return err
-	}
-
-	if err := stream.Send(&nodeattestorv1.AttestResponse{
-		Response: &nodeattestorv1.AttestResponse_Challenge{
-			Challenge: akChallengeBytes,
-		},
-	}); err != nil {
-		return err
-	}
-
-	resp, err := stream.Recv()
-	if err != nil {
-		return err
-	}
-
-	var platformParameters attest.PlatformParameters
-	if err := json.Unmarshal(resp.GetChallengeResponse(), &platformParameters); err != nil {
-		return err
-	}
-
-	if err := akPublic.VerifyAll(platformParameters.Quotes, platformParameters.PCRs, akChallengeBytes); err != nil {
-		return err
-	}
-
-	// Append PCR values to selectors
-	for _, pcr := range platformParameters.PCRs {
-		selectors = append(selectors, fmt.Sprintf("pcr:%s:%d:%x", pcr.DigestAlg, pcr.Index, pcr.Digest))
-	}
-
-	// TODO: In the future we could also add selectors for event log items.
-
 	return stream.Send(&nodeattestorv1.AttestResponse{
 		Response: &nodeattestorv1.AttestResponse_AgentAttributes{
 			AgentAttributes: &nodeattestorv1.AgentAttributes{

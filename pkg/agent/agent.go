@@ -49,9 +49,14 @@ type Plugin struct {
 type Config struct {
 	trustDomain string
 	PVE         PVEConfig `hcl:"pve"`
+	PCR         PCRConfig `hcl:"pcr"`
 }
 
 type PVEConfig struct {
+	Enabled bool `hcl:"enabled"`
+}
+
+type PCRConfig struct {
 	Enabled bool `hcl:"enabled"`
 }
 
@@ -144,31 +149,32 @@ func (p *Plugin) AidAttestation(stream nodeattestorv1.NodeAttestor_AidAttestatio
 	}
 
 	// TODO: keep protocol backwards compatible
-	resp, err = stream.Recv()
-	if err != nil {
-		return status.Errorf(status.Code(err), "failed to receive challenge: %v", err)
+	if p.config.PCR.Enabled {
+		resp, err = stream.Recv()
+		if err != nil {
+			return status.Errorf(status.Code(err), "failed to receive challenge: %v", err)
+		}
+
+		platformParameters, err := p.attestPlatform(aik, resp.Challenge)
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to attest platform: %v", err)
+		}
+
+		responseBytes, err = json.Marshal(platformParameters)
+		if err != nil {
+			return status.Errorf(codes.InvalidArgument, "unable to marshal platform parameters: %v", err)
+		}
+
+		err = stream.Send(&nodeattestorv1.PayloadOrChallengeResponse{
+			Data: &nodeattestorv1.PayloadOrChallengeResponse_ChallengeResponse{
+				ChallengeResponse: responseBytes,
+			},
+		})
+
+		if err != nil {
+			return status.Errorf(status.Code(err), "unable to send challenge response: %v", err)
+		}
 	}
-
-	platformParameters, err := p.attestPlatform(aik, resp.Challenge)
-	if err != nil {
-		return status.Errorf(codes.Internal, "failed to attest platform: %v", err)
-	}
-
-	responseBytes, err = json.Marshal(platformParameters)
-	if err != nil {
-		return status.Errorf(codes.InvalidArgument, "unable to marshal platform parameters: %v", err)
-	}
-
-	err = stream.Send(&nodeattestorv1.PayloadOrChallengeResponse{
-		Data: &nodeattestorv1.PayloadOrChallengeResponse_ChallengeResponse{
-			ChallengeResponse: responseBytes,
-		},
-	})
-
-	if err != nil {
-		return status.Errorf(status.Code(err), "unable to send challenge response: %v", err)
-	}
-
 	return nil
 }
 

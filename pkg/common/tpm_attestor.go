@@ -34,8 +34,8 @@ const (
 )
 
 type AttestationData struct {
-	EK []byte
-	AK *attest.AttestationParameters
+	EK  []byte
+	AK  *attest.AttestationParameters
 	PVE *PVEInstanceData
 }
 

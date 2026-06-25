@@ -17,8 +17,8 @@ import (
 	sim "github.com/google/go-tpm-tools/simulator"
 
 	"github.com/spiffe/spire-plugin-sdk/pluginsdk"
-	identityproviderv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/hostservice/server/identityprovider/v1"
 	"github.com/spiffe/spire-plugin-sdk/plugintest"
+	identityproviderv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/hostservice/server/identityprovider/v1"
 	agentnodeattestorv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/plugin/agent/nodeattestor/v1"
 	servernodeattestorv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/plugin/server/nodeattestor/v1"
 	configv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/service/common/config/v1"
@@ -38,9 +38,9 @@ var (
 		"model:id:00000000",
 		"pub_hash:" + hashExpected,
 	}
-	idExpected  = "spiffe://" + trustDomain + "/spire/agent/tpm/" + hashExpected
-	invalidHash = "0000000000000000000000000000000000000000000000000000000000000000"
-	invalidCAPEM           = []byte(`-----BEGIN CERTIFICATE-----
+	idExpected   = "spiffe://" + trustDomain + "/spire/agent/tpm/" + hashExpected
+	invalidHash  = "0000000000000000000000000000000000000000000000000000000000000000"
+	invalidCAPEM = []byte(`-----BEGIN CERTIFICATE-----
 MIIDjDCCAnSgAwIBAgIUWe6uPQG5Z+xnccBoXH9ui6dORgMwDQYJKoZIhvcNAQEL
 BQAwYTEZMBcGA1UECgwQVFBNIE1hbnVmYWN0dXJlcjEhMB8GA1UECwwYVFBNIE1h
 bnVmYWN0dXJlciBSb290IENBMSEwHwYDVQQDDBhUUE0gTWFudWZhY3R1cmVyIFJv
@@ -89,13 +89,13 @@ func TestAttestor(t *testing.T) {
 	}
 
 	testCases := []struct {
-		name             string
-		emptyCA          bool
-		err              string
-		hcl              string
-		pemEncodeCAs     bool
-		validateCAs      []*x509.Certificate
-		validateHashes   []string
+		name              string
+		emptyCA           bool
+		err               string
+		hcl               string
+		pemEncodeCAs      bool
+		validateCAs       []*x509.Certificate
+		validateHashes    []string
 		expectedSelectors []string
 	}{
 		{
@@ -321,8 +321,8 @@ func loadServerPlugin(t *testing.T, hclConfig string) servernodeattestorv1.NodeA
 	configClient := new(configv1.ConfigServiceClient)
 
 	plugintest.ServeInBackground(t, plugintest.Config{
-		PluginServer:   servernodeattestorv1.NodeAttestorPluginServer(p),
-		PluginClient:   nodeAttestorClient,
+		PluginServer: servernodeattestorv1.NodeAttestorPluginServer(p),
+		PluginClient: nodeAttestorClient,
 		ServiceServers: []pluginsdk.ServiceServer{
 			configv1.ConfigServiceServer(p),
 		},
