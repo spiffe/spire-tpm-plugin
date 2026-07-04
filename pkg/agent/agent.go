@@ -220,7 +220,14 @@ func (p *Plugin) attestPlatform(aikBytes []byte, nonce []byte) (*attest.Platform
 	}
 	defer aik.Close(tpm)
 
-	return tpm.AttestPlatform(aik, nonce, nil)
+	params, err := tpm.AttestPlatform(aik, nonce, nil)
+	if err != nil {
+		// Not all platforms expose a TCG event log, eg. VMs.
+		// PCR quotes are still useful without one, so retry with an empty
+		// event log instead of failing attestation.
+		params, err = tpm.AttestPlatform(aik, nonce, &attest.PlatformAttestConfig{EventLog: []byte{}})
+	}
+	return params, err
 }
 
 func (p *Plugin) generateAttestationData(ctx context.Context) (*common.AttestationData, []byte, error) {
