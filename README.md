@@ -50,12 +50,74 @@ NodeAttestor "tpm" {
 |:----|:-----|:---------|:------------|:--------|
 | ca_path | string |   | the path to the CA directory | /opt/spire/.data/certs |
 | hash_path | string |   | the path to the Hash directory | /opt/spire/.data/hashes |
+| pcr.enabled | bool |   | quote PCRs and emit PCR selectors, see [PCR selectors](#pcr-selectors-optional) | false |
 
 ### Proxmox support
 
 Attestation of Proxmox TPMs is now supported.
 
 Please read the [PVE.md](PVE.md) file for details.
+
+### PCR selectors
+
+The plugin can additionally quote the TPMs PCRs during attestation and expose them as selectors. This is opt-in and
+must be enabled on **both** the agent and the server:
+
+```hcl
+# agent plugin_data
+plugin_data {
+	pcr {
+		enabled = true
+	}
+}
+```
+
+```hcl
+# server plugin_data
+plugin_data {
+	ca_path = "/opt/spire/.data/certs"
+	pcr {
+		enabled = true
+	}
+}
+```
+
+| key | type | required | description | default |
+|:----|:-----|:---------|:------------|:--------|
+| pcr.enabled | bool |   | quote PCRs during attestation and emit PCR selectors | false |
+
+When enabled, the server sends an extra challenge (a random nonce) after
+credential activation. The agent answers with a quote over all supported PCR
+banks, signed by the AK. The server verifies the quote signature and nonce
+before emitting selectors, so the PCR values are authenticated by the TPM and
+cannot be spoofed by the host.
+
+The following selectors are then emitted in addition to the existing ones:
+
+| selector | description |
+|:---------|:------------|
+| `tpm:pcr:<alg>:<index>:<digest>` | one selector per PCR, e.g. `tpm:pcr:SHA-256:7:a3c6...` (hex-encoded digest) |
+| `tpm:secureboot:enabled` / `tpm:secureboot:disabled` | semantic secure boot state, derived from the TCG event log |
+
+The `secureboot` selector is only emitted if the machine exposes a TCG event
+log, eg. `/sys/kernel/security/tpm0/binary_bios_measurements` on Linux that
+parses and replays cleanly against the quoted PCR values. Machines without an
+accessible event log still emit the `pcr` selectors, just not `secureboot`.
+
+Example registration entry that only matches nodes with secure boot on:
+
+```bash
+spire-server entry create \
+	-spiffeID spiffe://example.org/secure-workload \
+	-parentID spiffe://example.org/spire/agent/tpm/<pub_hash> \
+	-selector tpm:secureboot:enabled \
+	...
+```
+
+*Note: PCR values change with every firmware, bootloader, or kernel update.
+Pinning raw `pcr` selectors in registration entries ties workloads to exact
+software versions. Prefer semantic selectors like `secureboot`,  unless you
+manage golden PCR values.*
 
 ### Directory Configuration
 
@@ -95,6 +157,10 @@ The plugin uses TPM credential activation as the method of attestation. The plug
 1. Agent decrypts the challenge's secret 
 1. Agent sends back decrypted secret
 1. Server verifies that the decrypted secret is the same it used to build the challenge
+1. If PCR selectors are enabled on both sides:
+    1. Server sends a second challenge containing a random nonce
+    1. Agent quotes all supported PCR banks with the AK (including the nonce) and sends back the quotes, PCR values, and TCG event log
+    1. Server verifies the quote signatures and nonce against the AK, then emits `pcr` (and in case the event log verifies `secureboot`) selectors
 1. Server creates a SPIFFE ID in the form of `spiffe://<trust_domain>/spire/agent/tpm/<sha256sum_of_tpm_pubkey>`
 1. All done!
 
