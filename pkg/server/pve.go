@@ -35,10 +35,10 @@ type PVEGlobalConfig struct {
 }
 
 type PVEConfig struct {
-	Hosts                []string `hcl:"hosts"`                // List of PVE control plane hosts
-	Port                 int      `hcl:"port"`                 // Optional port, defaults to 9443
-	ExpectedSpiffeID     string   `hcl:"expected_spiffe_id"`   // SPIFFE ID to validate on PVE nodes
-	HashPath             string   `hcl:"hash_path"`            // Optional path to check hashes
+	Hosts            []string `hcl:"hosts"`              // List of PVE control plane hosts
+	Port             int      `hcl:"port"`               // Optional port, defaults to 9443
+	ExpectedSpiffeID string   `hcl:"expected_spiffe_id"` // SPIFFE ID to validate on PVE nodes
+	HashPath         string   `hcl:"hash_path"`          // Optional path to check hashes
 	//FIXME consider an option for limiting join by selectors
 }
 

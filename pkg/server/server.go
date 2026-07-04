@@ -19,6 +19,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -44,6 +45,11 @@ type Config struct {
 	CaPath      string          `hcl:"ca_path"`
 	HashPath    string          `hcl:"hash_path"`
 	PVE         PVEGlobalConfig `hcl:"pve"`
+	PCR         PCRConfig       `hcl:"pcr"`
+}
+
+type PCRConfig struct {
+	Enabled bool `hcl:"enabled"`
 }
 
 // Plugin implements the nodeattestor Plugin interface
@@ -119,7 +125,7 @@ func (p *Plugin) Configure(ctx context.Context, req *configv1.ConfigureRequest) 
 }
 
 func (p *Plugin) Validate(ctx context.Context, req *configv1.ValidateRequest) (*configv1.ValidateResponse, error) {
-    return &configv1.ValidateResponse{}, nil
+	return &configv1.ValidateResponse{}, nil
 }
 
 func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
@@ -300,6 +306,54 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 	}
 
 	selectors = append(selectors, "pub_hash:"+hashEncoded)
+
+	if p.config.PCR.Enabled {
+		akPublic, err := attest.ParseAKPublic(ap.AK.Public)
+		if err != nil {
+			return status.Errorf(codes.Internal, "tpm: unable to parse AK public key: %v", err)
+		}
+
+		akChallengeBytes := make([]byte, 32)
+		if _, err := rand.Read(akChallengeBytes); err != nil {
+			return err
+		}
+
+		if err := stream.Send(&nodeattestorv1.AttestResponse{
+			Response: &nodeattestorv1.AttestResponse_Challenge{
+				Challenge: akChallengeBytes,
+			},
+		}); err != nil {
+			return err
+		}
+
+		resp, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+
+		var platformParameters attest.PlatformParameters
+		if err := json.Unmarshal(resp.GetChallengeResponse(), &platformParameters); err != nil {
+			return err
+		}
+
+		if err := akPublic.VerifyAll(platformParameters.Quotes, platformParameters.PCRs, akChallengeBytes); err != nil {
+			return err
+		}
+
+		// Append PCR values to selectors
+		for _, pcr := range platformParameters.PCRs {
+			selectors = append(selectors, fmt.Sprintf("pcr:%s:%d:%x", pcr.DigestAlg, pcr.Index, pcr.Digest))
+		}
+
+		// Append secureboot semantic label by parsing eventlog and verifying events
+		if enabled, err := parseSecureBootState(&platformParameters); err == nil {
+			if enabled {
+				selectors = append(selectors, "secureboot:enabled")
+			} else {
+				selectors = append(selectors, "secureboot:disabled")
+			}
+		}
+	}
 	return stream.Send(&nodeattestorv1.AttestResponse{
 		Response: &nodeattestorv1.AttestResponse_AgentAttributes{
 			AgentAttributes: &nodeattestorv1.AgentAttributes{
@@ -309,6 +363,25 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 			},
 		},
 	})
+}
+
+func parseSecureBootState(platformParameters *attest.PlatformParameters) (bool, error) {
+	eventLog, err := attest.ParseEventLog(platformParameters.EventLog)
+	if err != nil {
+		return false, fmt.Errorf(("error parsing eventlog: %v"), err)
+	}
+
+	events, err := eventLog.Verify(platformParameters.PCRs)
+	if err != nil {
+		return false, fmt.Errorf(("error verifying events: %v"), err)
+	}
+
+	sbState, err := attest.ParseSecurebootState(events)
+	if err != nil {
+		return false, fmt.Errorf(("error parsing secureboot state: %v"), err)
+	}
+
+	return sbState.Enabled, nil
 }
 
 func checkHashAllowed(hashPath, hashEncoded string) bool {

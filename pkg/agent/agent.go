@@ -47,12 +47,17 @@ type Plugin struct {
 }
 
 type Config struct {
-	trustDomain        string
-	PVE                PVEConfig `hcl:"pve"`
+	trustDomain string
+	PVE         PVEConfig `hcl:"pve"`
+	PCR         PCRConfig `hcl:"pcr"`
 }
 
 type PVEConfig struct {
-	Enabled         bool   `hcl:"enabled"`
+	Enabled bool `hcl:"enabled"`
+}
+
+type PCRConfig struct {
+	Enabled bool `hcl:"enabled"`
 }
 
 func (p *Plugin) Configure(ctx context.Context, req *configv1.ConfigureRequest) (*configv1.ConfigureResponse, error) {
@@ -78,9 +83,9 @@ func (p *Plugin) Configure(ctx context.Context, req *configv1.ConfigureRequest) 
 }
 
 func (p *Plugin) Validate(ctx context.Context, req *configv1.ValidateRequest) (*configv1.ValidateResponse, error) {
-    // Return an empty response to indicate the config is valid,
-    // or implement actual validation logic here.
-    return &configv1.ValidateResponse{}, nil
+	// Return an empty response to indicate the config is valid,
+	// or implement actual validation logic here.
+	return &configv1.ValidateResponse{}, nil
 }
 
 func New() *Plugin {
@@ -143,6 +148,32 @@ func (p *Plugin) AidAttestation(stream nodeattestorv1.NodeAttestor_AidAttestatio
 		return status.Errorf(status.Code(err), "unable to send challenge response: %v", err)
 	}
 
+	if p.config.PCR.Enabled {
+		resp, err = stream.Recv()
+		if err != nil {
+			return status.Errorf(status.Code(err), "failed to receive challenge: %v", err)
+		}
+
+		platformParameters, err := p.attestPlatform(aik, resp.Challenge)
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to attest platform: %v", err)
+		}
+
+		responseBytes, err = json.Marshal(platformParameters)
+		if err != nil {
+			return status.Errorf(codes.InvalidArgument, "unable to marshal platform parameters: %v", err)
+		}
+
+		err = stream.Send(&nodeattestorv1.PayloadOrChallengeResponse{
+			Data: &nodeattestorv1.PayloadOrChallengeResponse_ChallengeResponse{
+				ChallengeResponse: responseBytes,
+			},
+		})
+
+		if err != nil {
+			return status.Errorf(status.Code(err), "unable to send challenge response: %v", err)
+		}
+	}
 	return nil
 }
 
@@ -170,6 +201,33 @@ func (p *Plugin) calculateResponse(ec *attest.EncryptedCredential, aikBytes []by
 	return &common.ChallengeResponse{
 		Secret: secret,
 	}, nil
+}
+
+func (p *Plugin) attestPlatform(aikBytes []byte, nonce []byte) (*attest.PlatformParameters, error) {
+	tpm := p.tpm
+	if tpm == nil {
+		var err error
+		tpm, err = attest.OpenTPM(&attest.OpenConfig{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to tpm: %v", err)
+		}
+		defer tpm.Close()
+	}
+
+	aik, err := tpm.LoadAK(aikBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer aik.Close(tpm)
+
+	params, err := tpm.AttestPlatform(aik, nonce, nil)
+	if err != nil {
+		// Not all platforms expose a TCG event log, eg. VMs.
+		// PCR quotes are still useful without one, so retry with an empty
+		// event log instead of failing attestation.
+		params, err = tpm.AttestPlatform(aik, nonce, &attest.PlatformAttestConfig{EventLog: []byte{}})
+	}
+	return params, err
 }
 
 func (p *Plugin) generateAttestationData(ctx context.Context) (*common.AttestationData, []byte, error) {
