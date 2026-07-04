@@ -96,6 +96,8 @@ func TestAttestor(t *testing.T) {
 		pemEncodeCAs      bool
 		validateCAs       []*x509.Certificate
 		validateHashes    []string
+		agentPCR          bool
+		serverPCR         bool
 		expectedSelectors []string
 	}{
 		{
@@ -134,6 +136,31 @@ func TestAttestor(t *testing.T) {
 			validateHashes: []string{hashExpected},
 		},
 		{
+			name:              "pcr selectors when enabled",
+			validateHashes:    []string{hashExpected},
+			agentPCR:          true,
+			serverPCR:         true,
+			expectedSelectors: append([]string{"pub_hash:" + hashExpected}, pcrSelectors(t, tpm)...),
+		},
+		{
+			name:              "pcr selectors with CA validation",
+			validateCAs:       []*x509.Certificate{tpmCACert},
+			agentPCR:          true,
+			serverPCR:         true,
+			expectedSelectors: append(append([]string{}, selectorValuesCAExpected...), pcrSelectors(t, tpm)...),
+		},
+		{
+			name:           "pcr enabled on agent only is ignored",
+			validateHashes: []string{hashExpected},
+			agentPCR:       true,
+		},
+		{
+			name:           "error pcr enabled on server but not agent",
+			validateHashes: []string{hashExpected},
+			serverPCR:      true,
+			err:            "agent plugin",
+		},
+		{
 			name:    "error empty CA",
 			emptyCA: true,
 			err:     "could not verify cert",
@@ -166,9 +193,17 @@ func TestAttestor(t *testing.T) {
 			if testCase.hcl != "" {
 				hcl = testCase.hcl
 			}
+			if testCase.serverPCR {
+				hcl += "pcr { enabled = true }\n"
+			}
+
+			agentHCL := ""
+			if testCase.agentPCR {
+				agentHCL = "pcr { enabled = true }"
+			}
 
 			// load up the fake agent-side node attestor
-			agentPlugin := loadAgentPlugin(t, tpm)
+			agentPlugin := loadAgentPlugin(t, tpm, agentHCL)
 			serverPlugin := loadServerPlugin(t, hcl)
 
 			attribs, err := doAttestationFlow(t, agentPlugin, serverPlugin)
@@ -290,7 +325,7 @@ func prepareTestDir(t *testing.T, caCerts []*x509.Certificate,
 	return hcl
 }
 
-func loadAgentPlugin(t *testing.T, tpm *attest.TPM) agentnodeattestorv1.NodeAttestorClient {
+func loadAgentPlugin(t *testing.T, tpm *attest.TPM, hclConfig string) agentnodeattestorv1.NodeAttestorClient {
 	p := New()
 	p.tpm = tpm
 
@@ -305,12 +340,32 @@ func loadAgentPlugin(t *testing.T, tpm *attest.TPM) agentnodeattestorv1.NodeAtte
 	})
 
 	_, err := configClient.Configure(context.Background(), &configv1.ConfigureRequest{
+		HclConfiguration: hclConfig,
 		CoreConfiguration: &configv1.CoreConfiguration{
 			TrustDomain: trustDomain,
 		},
 	})
 	require.NoError(t, err)
 	return nodeAttestorClient
+}
+
+// pcrSelectors returns the selectors the server plugin is expected to emit for
+// the simulators current PCR values, mirroring the iteration order of
+// attest.TPM.AttestPlatform
+func pcrSelectors(t *testing.T, tpm *attest.TPM) []string {
+	banks, err := tpm.PCRBanks()
+	require.NoError(t, err)
+
+	var selectors []string
+	for _, alg := range banks {
+		pcrs, err := tpm.PCRs(alg)
+		require.NoError(t, err)
+		for _, pcr := range pcrs {
+			selectors = append(selectors, fmt.Sprintf("pcr:%s:%d:%x", pcr.DigestAlg, pcr.Index, pcr.Digest))
+		}
+	}
+	require.NotEmpty(t, selectors)
+	return selectors
 }
 
 func loadServerPlugin(t *testing.T, hclConfig string) servernodeattestorv1.NodeAttestorClient {
