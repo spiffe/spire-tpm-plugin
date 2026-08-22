@@ -312,6 +312,10 @@ func (p *Plugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServer) error {
 }
 
 func checkHashAllowed(hashPath, hashEncoded string) bool {
+	if hashEncoded == "" {
+		return false
+	}
+
 	// Check if hashPath is a directory, fail if this is simply a file
 	fileInfo, err := os.Stat(hashPath)
 	if err != nil || !fileInfo.IsDir() {
@@ -319,7 +323,7 @@ func checkHashAllowed(hashPath, hashEncoded string) bool {
 	}
 
 	filename := filepath.Join(hashPath, hashEncoded)
-	if _, err := os.Stat(filename); !os.IsNotExist(err) {
+	if _, err := os.Stat(filename); err == nil {
 		return true
 	}
 	return false

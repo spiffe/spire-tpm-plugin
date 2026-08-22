@@ -96,6 +96,7 @@ func TestAttestor(t *testing.T) {
 		pemEncodeCAs     bool
 		validateCAs      []*x509.Certificate
 		validateHashes   []string
+		statErrorHashes  []string
 		expectedSelectors []string
 	}{
 		{
@@ -149,6 +150,11 @@ func TestAttestor(t *testing.T) {
 			err:            "could not validate EK",
 		},
 		{
+			name:            "error reading matching hash allowlist entry",
+			statErrorHashes: []string{hashExpected},
+			err:             "could not validate EK",
+		},
+		{
 			name:           "error invalid hash, invalid CA",
 			validateCAs:    []*x509.Certificate{invalidCA},
 			validateHashes: []string{invalidHash},
@@ -162,7 +168,7 @@ func TestAttestor(t *testing.T) {
 
 			// prepare the temp directory
 			hcl := prepareTestDir(t, testCase.validateCAs, testCase.pemEncodeCAs,
-				testCase.emptyCA, testCase.validateHashes)
+				testCase.emptyCA, testCase.validateHashes, testCase.statErrorHashes)
 			if testCase.hcl != "" {
 				hcl = testCase.hcl
 			}
@@ -256,7 +262,7 @@ func doAttestationFlow(t *testing.T, agentPlugin agentnodeattestorv1.NodeAttesto
 }
 
 func prepareTestDir(t *testing.T, caCerts []*x509.Certificate,
-	pemEncodeCA bool, emptyCA bool, hashes []string) string {
+	pemEncodeCA bool, emptyCA bool, hashes, statErrorHashes []string) string {
 	dir := t.TempDir()
 
 	hcl := ""
@@ -278,12 +284,17 @@ func prepareTestDir(t *testing.T, caCerts []*x509.Certificate,
 		}
 	}
 
-	if hashes != nil {
+	if hashes != nil || statErrorHashes != nil {
 		hashPath := filepath.Join(dir, "hashes")
 		hcl += fmt.Sprintf("hash_path = \"%s\"\n", hashPath)
 		require.NoError(t, os.Mkdir(hashPath, 0755))
 		for i := range hashes {
 			writeFile(t, filepath.Join(hashPath, hashes[i]), []byte{}, 0644)
+		}
+		for i := range statErrorHashes {
+			// A self-referential symlink makes stat return ELOOP. This is a
+			// stable unexpected-error case even when tests run as root.
+			require.NoError(t, os.Symlink(statErrorHashes[i], filepath.Join(hashPath, statErrorHashes[i])))
 		}
 	}
 
