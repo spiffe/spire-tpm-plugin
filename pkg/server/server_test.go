@@ -10,11 +10,12 @@ import (
 
 func Test_checkHashAllowed(t *testing.T) {
 	tests := []struct {
-		name        string
-		setupFile   bool
-		hashEncoded string
-		rootIsFile  bool
-		want        bool
+		name           string
+		setupFile      bool
+		setupStatError bool
+		hashEncoded    string
+		rootIsFile     bool
+		want           bool
 	}{
 		{
 			name:        "hash exists",
@@ -29,6 +30,11 @@ func Test_checkHashAllowed(t *testing.T) {
 			want:        false,
 		},
 		{
+			name:        "empty hash does not match directory",
+			hashEncoded: "",
+			want:        false,
+		},
+		{
 			// We don't want to be fail-open in the case the user
 			// makes the hash_path parameter a file instead of a directory
 			// Previously this would allow all hashes to attest
@@ -37,6 +43,15 @@ func Test_checkHashAllowed(t *testing.T) {
 			rootIsFile:  true,
 			hashEncoded: "example-hash-abc",
 			want:        false,
+		},
+		{
+			// Any lookup error other than a missing allowlist entry must also
+			// fail closed. A self-referential symlink produces ELOOP reliably,
+			// including when the test runs as root.
+			name:           "hash lookup returns an unexpected stat error",
+			setupStatError: true,
+			hashEncoded:    "stat-error-hash",
+			want:           false,
 		},
 	}
 
@@ -61,10 +76,10 @@ func Test_checkHashAllowed(t *testing.T) {
 				}
 			}
 
-			if tt.setupFile {
+			if tt.setupStatError {
 				path := filepath.Join(root, tt.hashEncoded)
-				if err := os.WriteFile(path, []byte(""), 0644); err != nil {
-					t.Fatalf("failed to create test file: %v", err)
+				if err := os.Symlink(tt.hashEncoded, path); err != nil {
+					t.Fatalf("failed to create self-referential symlink: %v", err)
 				}
 			}
 
