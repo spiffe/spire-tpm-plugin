@@ -1,4 +1,4 @@
-FROM --platform=${BUILDPLATFORM} golang:1.26.1-alpine3.22 as build
+FROM --platform=${BUILDPLATFORM} golang:1.26.10-alpine as build
 
 ARG BINARY
 ARG TARGETOS
